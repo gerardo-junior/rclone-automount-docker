@@ -184,7 +184,7 @@ initialize() {
 
 # Run rclone as a daemon
 (
-  sh -c "rclone rcd --rc-web-gui --rc-no-auth --rc-web-gui-update --rc-web-gui-force-update --rc-web-gui-no-open-browser --rc-addr :$RCLONE_PORT --rc-user $RCLONE_USERNAME --rc-pass $RCLONE_PASSWORD $RCLONE_OPTS" 2>&1 | \
+  sh -c "rclone rcd --rc-web-gui --rc-web-gui-update --rc-web-gui-force-update --rc-web-gui-no-open-browser --rc-addr :$RCLONE_PORT --rc-user $RCLONE_USERNAME --rc-pass $RCLONE_PASSWORD $RCLONE_OPTS" 2>&1 | \
   sed -E "s/$RCLONE_USERNAME/REDACTED/g; s/$RCLONE_PASSWORD/REDACTED/g" &
   PID_RCLONE=$!
 
