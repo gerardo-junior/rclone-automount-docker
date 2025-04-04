@@ -6,13 +6,19 @@ import logging
 from requests.auth import HTTPBasicAuth
 
 # Logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s %(levelname)s: %(message)s',
+    datefmt='%Y/%m/%d %H:%M:%S'
+)
+
 # Environment variables
 USERNAME = os.getenv('RCLONE_USERNAME')
 PASSWORD = os.getenv('RCLONE_PASSWORD')
-PORT = os.getenv('RCLONE_PORT') or '5572'
+PORT = os.getenv('RCLONE_PORT')
+
 # Constants
-RCLONE_URL = f"http://rclone:{PORT}"
+RCLONE_URL = f"http://127.0.0.1:{PORT}"
 AUTH = HTTPBasicAuth(USERNAME, PASSWORD) if USERNAME and PASSWORD else None
 HEADERS = {'Content-Type': 'application/json', 'User-Agent': 'RcloneClient/1.0'}
 RETRY_INTERVAL = 10  # seconds
@@ -27,7 +33,7 @@ def is_rclone_ready():
 
 def read_mount_payloads():
     try:
-        with open('mounts.json', 'r') as file:
+        with open('/config/mounts.json', 'r') as file:
             return json.load(file)
     except FileNotFoundError:
         logging.error("mounts.json file not found.")
