@@ -13,10 +13,12 @@ mkdir -p /config && chmod -R g+rwX /config
 RCLONE_PORT="${RCLONE_PORT:-5572}"
 RCLONE_USERNAME="${RCLONE_USERNAME:-rclone}"
 RCLONE_PASSWORD="${RCLONE_PASSWORD:-rclone}"
-RETRY_INTERVAL="${RETRY_INTERVAL:-2}"
+RCLONE_OPTS="${RCLONE_OPTS:-"--check-first -vv --update --tpslimit 5"}"
 RCLONE_CONFIG="${RCLONE_CONFIG:-"/config/rclone.conf"}"
-MOUNTS_FILE="${MOUNTS_FILE:-"/config/mounts.json"}"
 RCLONE_URL="http://127.0.0.1:${RCLONE_PORT}"
+RETRY_INTERVAL="${RETRY_INTERVAL:-2}"
+MOUNTS_FILE="${MOUNTS_FILE:-"/config/mounts.json"}"
+
 
 # Logging function
 log() {
@@ -176,7 +178,7 @@ initialize() {
 
 # Run rclone as a daemon
 (
-  sh -c "rclone rcd --rc-web-gui --rc-no-auth --rc-web-gui-update --rc-web-gui-force-update --rc-web-gui-no-open-browser --rc-addr :$RCLONE_PORT --rc-user $RCLONE_USERNAME --rc-pass $RCLONE_PASSWORD" &
+  sh -c "rclone rcd --rc-web-gui --rc-no-auth --rc-web-gui-update --rc-web-gui-force-update --rc-web-gui-no-open-browser --rc-addr :$RCLONE_PORT --rc-user $RCLONE_USERNAME --rc-pass $RCLONE_PASSWORD  $RCLONE_OPTS" &
   PID_RCLONE=$!
 
   # Wait a few seconds to ensure rclone is ready

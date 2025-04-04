@@ -1,19 +1,32 @@
 [
   {
-    "fs": "OneDrive:",
-    "mountPoint": "/hostfs/onedrive/onedrive_0",
+    "fs": "gphotos-fsociety:",
+    "mountPoint": "/mnt/gphotos-fsociety",
     "mountOpt": {
-      "AllowOther": true
+      "AllowOther": true,
+      "AllowNonEmpty": true
     },
     "vfsOpt": {
       "CacheMode": "full"
     }
   },
   {
-    "fs": "GoogleDrive:",
-    "mountPoint": "/hostfs/gdrive/grive_0",
+    "fs": "gphotos-carolmischi:",
+    "mountPoint": "/mnt/gphotos-carolmischi",
     "mountOpt": {
-      "AllowOther": true
+      "AllowOther": true,
+      "AllowNonEmpty": true
+    },
+    "vfsOpt": {
+      "CacheMode": "full"
+    }
+  },
+  {
+    "fs": "protondrive-fsociety:",
+    "mountPoint": "/mnt/protondrive-fsociety",
+    "mountOpt": {
+      "AllowOther": true,
+      "AllowNonEmpty": true
     },
     "vfsOpt": {
       "CacheMode": "full"
