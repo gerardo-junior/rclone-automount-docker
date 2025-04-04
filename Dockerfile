@@ -2,19 +2,23 @@ ARG RCLONE_VER="latest"
 FROM rclone/rclone:$RCLONE_VER
 
 LABEL maintainer="Gerardo Junior <me@gerardo-junior.com>"
-LABEL url="https://github.com/gerardo-junior/nuxtjs-docker.git"
+LABEL url="https://github.com/gerardo-junior/rclone-docker.git"
 
-RUN apk update && \
-    apk add python3 py3-requests
+# # Atualizar pacotes e instalar dependências necessárias
+# RUN apk update && \
+#     apk add --no-cache curl jq
 
+# # Copiar os scripts para o contêiner
 COPY ./tools /tools
-# RUN pip install -r /tools/requirements.txt
 
-VOLUME ["/config"]
-WORKDIR /config
-RUN chgrp -R 0 /config && \
-    chmod -R g+rwX /config && \
-    chown -R rclone:0 /config && \
-    chmod +x /tools/entrypoint.sh
+# Configurar permissões
+# VOLUME ["/config"]
+# WORKDIR /config
+# RUN chgrp -R 0 /config && \
+#     chmod -R g+rwX /config && \
+#     chown -R rclone:0 /config && \
+#     chmod +x /tools/entrypoint.sh
+
+# Definir o ponto de entrada
 ENTRYPOINT ["/tools/entrypoint.sh"]
-USER rclone
+# USER rclone
