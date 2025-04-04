@@ -1,15 +1,14 @@
 #!/bin/sh
 
 # Install dependencies if not already installed
-if ! command -v curl >/dev/null 2>&1 || ! command -v jq >/dev/null 2>&1; then
-  echo "Installing required dependencies: curl, jq..."
-  apk update && apk add --no-cache curl jq
+if ! command -v curl >/dev/null 2>&1 || ! command -v jq >/dev/null 2>&1 || ! command -v fusermount3 >/dev/null 2>&1; then
+  echo "Installing required dependencies: curl, jq, fuse3..."
+  apk update && apk add --no-cache curl jq fuse3
 fi
 
 # Set permissions for /config directory
 echo "Setting permissions for /config directory..."
-mkdir -p /config
-chmod -R g+rwX /config
+mkdir -p /config && chmod -R g+rwX /config
 
 RCLONE_PORT="${RCLONE_PORT:-5572}"
 RCLONE_USERNAME="${RCLONE_USERNAME:-rclone}"
@@ -33,6 +32,24 @@ log() {
 
   echo "$timestamp $level: $message" >&2
 }
+
+# Function to unmount all mount points
+unmount_all() {
+  log "NOTICE" "Unmounting all mount points before starting..."
+  if [ -f "$MOUNTS_FILE" ]; then
+    jq -c '.[]' "$MOUNTS_FILE" | while IFS= read -r payload; do
+      local mount_point
+      mount_point=$(echo "$payload" | jq -r '.mountPoint')
+      log "NOTICE" "Attempting to unmount $mount_point..."
+      fusermount3 -u "$mount_point" 2>/dev/null || log "DEBUG" "Unmount failed or not mounted: $mount_point. Continuing..."
+    done
+  else
+    log "NOTICE" "No mounts file found. Skipping unmount."
+  fi
+}
+
+# Trap signals for graceful shutdown
+trap 'unmount_all; kill $PID_RCLONE; exit 0' SIGTERM SIGINT
 
 # Ensure mounts.json exists
 ensure_mounts_file() {
@@ -75,7 +92,7 @@ read_mount_payloads() {
 
 # Function to mount payloads
 mount_payloads() {
-  local all_mount_success=1
+  local all_mount_success=0  # Start with success (0 means success in shell)
   local payloads
   log "DEBUG" "Reading mount payloads."
   payloads=$(read_mount_payloads) || return 1
@@ -101,8 +118,26 @@ mount_payloads() {
     # Validate required fields
     if [ -z "$fs" ] || [ -z "$mount_point" ]; then
       log "ERROR" "Invalid payload: $payload"
-      all_mount_success=0
+      all_mount_success=1  # Mark as failure
       continue
+    fi
+
+    # Ensure the mount point exists
+    log "DEBUG" "Checking if mount point $mount_point exists."
+    if [ ! -d "$mount_point" ]; then
+      log "NOTICE" "Creating mount point: $mount_point"
+      mkdir -p "$mount_point" 2>&1 || {
+        log "ERROR" "Failed to create directory $mount_point"
+        all_mount_success=1  # Mark as failure
+        continue
+      }
+      chmod 777 "$mount_point" 2>&1 || {
+        log "ERROR" "Failed to set permissions on $mount_point"
+        all_mount_success=1  # Mark as failure
+        continue
+      }
+    else
+      log "DEBUG" "Mount point $mount_point already exists."
     fi
 
     log "NOTICE" "Mounting $fs to $mount_point..."
@@ -114,7 +149,7 @@ mount_payloads() {
       log "NOTICE" "Mount successful."
     else
       log "ERROR" "Failed to mount $fs: HTTP status $response."
-      all_mount_success=0
+      all_mount_success=1  # Mark as failure
     fi
   done
 
@@ -141,11 +176,14 @@ initialize() {
 
 # Run rclone as a daemon
 (
-  sh -c "rclone rcd --rc-web-gui --rc-web-gui-update --rc-web-gui-force-update --rc-web-gui-no-open-browser --rc-addr :$RCLONE_PORT --rc-user $RCLONE_USERNAME --rc-pass $RCLONE_PASSWORD" &
+  sh -c "rclone rcd --rc-web-gui --rc-no-auth --rc-web-gui-update --rc-web-gui-force-update --rc-web-gui-no-open-browser --rc-addr :$RCLONE_PORT --rc-user $RCLONE_USERNAME --rc-pass $RCLONE_PASSWORD" &
   PID_RCLONE=$!
 
   # Wait a few seconds to ensure rclone is ready
   sleep $RETRY_INTERVAL
+
+  # Unmount all before starting
+  unmount_all
 
   # Run the initialization logic
   if ! initialize; then
