@@ -1,7 +1,7 @@
 [
   {
-    "fs": "gphotos-fsociety:",
-    "mountPoint": "/mnt/gphotos-fsociety",
+    "fs": "gphotos:",
+    "mountPoint": "/mnt/gphotos",
     "mountOpt": {
       "AllowOther": true,
       "AllowNonEmpty": true
@@ -11,19 +11,8 @@
     }
   },
   {
-    "fs": "gphotos-carolmischi:",
-    "mountPoint": "/mnt/gphotos-carolmischi",
-    "mountOpt": {
-      "AllowOther": true,
-      "AllowNonEmpty": true
-    },
-    "vfsOpt": {
-      "CacheMode": "full"
-    }
-  },
-  {
-    "fs": "protondrive-fsociety:",
-    "mountPoint": "/mnt/protondrive-fsociety",
+    "fs": "protondrive:",
+    "mountPoint": "/mnt/protondrive",
     "mountOpt": {
       "AllowOther": true,
       "AllowNonEmpty": true

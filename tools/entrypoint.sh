@@ -13,7 +13,13 @@ mkdir -p /config && chmod -R g+rwX /config
 RCLONE_PORT="${RCLONE_PORT:-5572}"
 RCLONE_USERNAME="${RCLONE_USERNAME:-rclone}"
 RCLONE_PASSWORD="${RCLONE_PASSWORD:-rclone}"
-RCLONE_OPTS="${RCLONE_OPTS:-"--check-first -vv --update --tpslimit 5"}"
+RCLONE_OPTS="${RCLONE_OPTS:-"--check-first --update --tpslimit 5"}"
+
+# Adicionar "-vv" ao RCLONE_OPTS se DEBUG estiver definido como 1
+if [ "${DEBUG:-0}" -eq 1 ]; then
+  RCLONE_OPTS="$RCLONE_OPTS -vv"
+fi
+
 RCLONE_CONFIG="${RCLONE_CONFIG:-"/config/rclone.conf"}"
 RCLONE_URL="http://127.0.0.1:${RCLONE_PORT}"
 RETRY_INTERVAL="${RETRY_INTERVAL:-2}"
@@ -179,7 +185,7 @@ initialize() {
 # Run rclone as a daemon
 (
   sh -c "rclone rcd --rc-web-gui --rc-no-auth --rc-web-gui-update --rc-web-gui-force-update --rc-web-gui-no-open-browser --rc-addr :$RCLONE_PORT --rc-user $RCLONE_USERNAME --rc-pass $RCLONE_PASSWORD $RCLONE_OPTS" 2>&1 | \
-  sed -E "s/$RCLONE_USERNAME:[^@]+/REDACTED:REDACTED/g" &
+  sed -E "s/$RCLONE_USERNAME/REDACTED/g; s/$RCLONE_PASSWORD/REDACTED/g" &
   PID_RCLONE=$!
 
   # Wait a few seconds to ensure rclone is ready
