@@ -9,6 +9,8 @@ RCLONE_URL="http://127.0.0.1:${RCLONE_PORT}"
 RETRY_INTERVAL="${RETRY_INTERVAL:-2}"
 MOUNTS_FILE="${MOUNTS_FILE:-"/config/mounts.json"}"
 TASKS_FILE="${TASKS_FILE:-"/config/tasks.json"}"
+CACHE_DIR="${CACHE_DIR:-"/cache"}"
+TASK_RUNNING_FILE="${TASK_RUNNING_FILE:-"${CACHE_DIR}/tasks_running.json"}"
 
 # Logging function
 log() {
@@ -31,10 +33,19 @@ make_curl_request() {
     local endpoint="$2"
     local data="$3"
     shift 3  # Remove os três primeiros argumentos
-    curl -s --connect-timeout 0 --max-time 0 -u "$RCLONE_USERNAME:$RCLONE_PASSWORD" \
-    -X "$method" "$RCLONE_URL/$endpoint" \
-    -H "Content-Type: application/json" \
-    -d "$data" "$@"
+
+    if [ -n "$data" ]; then
+        # Se o terceiro parâmetro não estiver vazio, inclua -d e -H
+        curl -s --connect-timeout 0 --max-time 0 -u "$RCLONE_USERNAME:$RCLONE_PASSWORD" \
+        -X "$method" "$RCLONE_URL/$endpoint" \
+        -H "Content-Type: application/json" \
+        -d "$data" "$@"
+    else
+        # Caso contrário, não inclua -d e -H
+        curl -s --connect-timeout 0 --max-time 0 -u "$RCLONE_USERNAME:$RCLONE_PASSWORD" \
+        -X "$method" "$RCLONE_URL/$endpoint" \
+        "$@"
+    fi
 }
 
 # Function to unmount all mount points
@@ -98,7 +109,7 @@ ensure_file_exists() {
         log "NOTICE" "Creating $file_path with an empty array."
         mkdir -p "$(dirname "$file_path")"
         echo '[]' > "$file_path"
-        elif ! jq empty "$file_path" >/dev/null 2>&1; then # Verify if the file contains valid JSON
+    elif ! jq empty "$file_path" >/dev/null 2>&1; then # Verify if the file contains valid JSON
         log "ERROR" "The file $file_path contains invalid JSON. Exiting..."
         graceful_shutdown 1
     fi
@@ -133,52 +144,57 @@ execute_task() {
         return 1
     fi
 
-    # Check if a job with the same parameters is already running
-    log "DEBUG" "Checking for existing jobs with the same parameters..."
-    local existing_jobs
-    existing_jobs=$(make_curl_request "POST" "job/list" "" | jq -c '.jobids[]' 2>/dev/null)
+    # Generate a task identifier (MD5 hash)
+    local task_id
+    task_id="$command $srcFs -> $dstFs"
 
-    if [ -n "$existing_jobs" ]; then
-        for job_id in $existing_jobs; do
-            local job_info
-            job_info=$(make_curl_request "POST" "job/status?jobid=$job_id" "")
+    # Check if the task is already running
+    local existing_task
+    existing_task=$(jq -c --arg task "$task_id" '.[] | select(.task == $task)' "$TASK_RUNNING_FILE")
 
-            # Check if the job is still running
-            local job_finished
-            job_finished=$(echo "$job_info" | jq -r '.finished')
+    if [ -n "$existing_task" ]; then
+        local job_id
+        job_id=$(echo "$existing_task" | jq -r '.job_id')
 
-            if [ "$job_finished" = "false" ]; then
-                local job_command job_srcFs job_dstFs
-                job_command=$(echo "$job_info" | jq -r '.command')
-                job_srcFs=$(echo "$job_info" | jq -r '.group.srcFs // empty')
-                job_dstFs=$(echo "$job_info" | jq -r '.group.dstFs // empty')
+        # Check the status of the existing job
+        local job_info
+        job_info=$(make_curl_request "POST" "job/status?jobid=$job_id" "")
 
-                if [ "$job_command" = "$command" ] && [ "$job_srcFs" = "$srcFs" ] && [ "$job_dstFs" = "$dstFs" ]; then
-                    log "NOTICE" "A task: $command $srcFs $dstFs with the same parameters is already running (Job ID: $job_id). Skipping execution."
-                    return 0
-                fi
-            fi
-        done
+        local job_finished
+        job_finished=$(echo "$job_info" | jq -r '.finished')
+
+        if [ "$job_finished" = "false" ]; then
+            log "NOTICE" "Task $command $srcFs $dstFs is already running (Job ID: $job_id). Skipping execution."
+            return 0
+        fi
+
+        # If the job is finished, remove it from the cache
+        jq --arg task "$task_id" 'del(.[] | select(.task == $task))' "$TASK_RUNNING_FILE" > "${TASK_RUNNING_FILE}.tmp" && mv "${TASK_RUNNING_FILE}.tmp" "$TASK_RUNNING_FILE"
     fi
 
     # Add _async=true to the options
     opts=$(echo "$opts" | jq '. + {"_async": true}')
 
-    # Log the task start
+    # Execute the task
     log "DEBUG" "Starting task: $command $srcFs $dstFs"
+    local response
+    response=$(make_curl_request "POST" "sync/$command" "$opts")
+    # Extract the job ID from the response
+    local job_id
+    job_id=$(echo "$response" | jq -r '.jobid // empty')
 
-    # Execute the curl command directly
-    make_curl_request "POST" "$command/$command" "$opts" >/dev/null 2>&1
-    local exit_code=$?
+    if [ -n "$job_id" ]; then
+        # Update the cache file with the new task
+        jq --arg task "$task_id" --arg job_id "$job_id" \
+            '. += [{"task": $task, "job_id": ($job_id | tonumber)}]' "$TASK_RUNNING_FILE" > "${TASK_RUNNING_FILE}.tmp" && mv "${TASK_RUNNING_FILE}.tmp" "$TASK_RUNNING_FILE"
 
-    # Log the task result
-    if [ $exit_code -eq 0 ]; then
-        log "NOTICE" "Task started successfully: $command $srcFs $dstFs"
+        log "NOTICE" "Task started successfully: $command $srcFs $dstFs (Job ID: $job_id)"
     else
-        log "ERROR" "Failed to start task with exit code $exit_code: $command $srcFs $dstFs"
+        log "ERROR" "Failed to start task: $command $srcFs $dstFs. Response: $response"
+        return 1
     fi
 
-    return $exit_code
+    return 0
 }
 
 # Function to read mount payloads
@@ -282,6 +298,7 @@ setup_cron_tasks() {
     SCRIPT_PATH="$(realpath "$0")"
     
     ensure_file_exists "$TASKS_FILE"
+    echo '[]' > $TASK_RUNNING_FILE
     
     # Ensure the cron directory exists
     mkdir -p "$cron_dir"
@@ -400,8 +417,8 @@ entrypoint() {
 
         # Start rclone daemon
         log "NOTICE" "Starting rclone daemon..."
-        sh -c "rclone rcd --rc-web-gui --rc-web-gui-update --rc-web-gui-force-update --rc-web-gui-no-open-browser --rc-addr :$RCLONE_PORT --rc-user $RCLONE_USERNAME --rc-pass $RCLONE_PASSWORD --cache-dir /cache $RCLONE_OPTS" 2>&1 | \
-        sed -E "s/$RCLONE_PASSWORD/REDACTED/g" &
+        sh -c "rclone rcd --rc-web-gui --rc-web-gui-update --rc-web-gui-force-update --rc-web-gui-no-open-browser --rc-addr :$RCLONE_PORT --rc-user $RCLONE_USERNAME --rc-pass $RCLONE_PASSWORD --cache-dir $CACHE_DIR $RCLONE_OPTS" 2>&1 | \
+        sed -E "s/$RCLONE_PASSWORD/XXXX/g" &
 
         # Wait a few seconds to ensure rclone is ready
         sleep $RETRY_INTERVAL
@@ -443,7 +460,6 @@ entrypoint() {
 if [ "$1" = "execute_task" ]; then
     shift
     execute_task "$@"
-    exit $?
 fi
 
 # Call the entrypoint function if no arguments are provided
