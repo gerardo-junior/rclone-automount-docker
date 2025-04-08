@@ -10,7 +10,7 @@ RETRY_INTERVAL="${RETRY_INTERVAL:-2}"
 MOUNTS_FILE="${MOUNTS_FILE:-"/config/mounts.json"}"
 TASKS_FILE="${TASKS_FILE:-"/config/tasks.json"}"
 CACHE_DIR="${CACHE_DIR:-"/cache"}"
-TASK_RUNNING_FILE="${TASK_RUNNING_FILE:-"${CACHE_DIR}/tasks_running.json"}"
+TASK_RUNNING_FILE="${TASK_RUNNING_FILE:-"${CACHE_DIR}/tasks_running"}"
 
 # Logging function
 log() {
@@ -148,13 +148,22 @@ execute_task() {
     local task_id
     task_id="$command $srcFs -> $dstFs"
 
-    # Check if the task is already running
-    local existing_task
-    existing_task=$(jq -c --arg task "$task_id" '.[] | select(.task == $task)' "$TASK_RUNNING_FILE")
+    local tasks_running;
+    tasks_running=$(tac $TASK_RUNNING_FILE | awk '{
+            key = $0;                  # salva linha completa
+            sub(/ [0-9]+$/, "", key);  # remove número final só pra comparação
+            if (!seen[key]++) {
+                linhas[key] = $0       # salva a linha original (com número) da última ocorrência
+            }
+        }
+        END {
+            for (k in linhas) print linhas[k]
+        }' | tac | grep "$task_id");
 
-    if [ -n "$existing_task" ]; then
+    # Check if the task is already running
+    if grep -q "^$task_id " "$TASK_RUNNING_FILE"; then
         local job_id
-        job_id=$(echo "$existing_task" | jq -r '.job_id')
+        job_id=$(grep "^$task_id " "$TASK_RUNNING_FILE" | awk '{print $NF}')
 
         # Check the status of the existing job
         local job_info
@@ -169,7 +178,7 @@ execute_task() {
         fi
 
         # If the job is finished, remove it from the cache
-        jq --arg task "$task_id" 'del(.[] | select(.task == $task))' "$TASK_RUNNING_FILE" > "${TASK_RUNNING_FILE}.tmp" && mv "${TASK_RUNNING_FILE}.tmp" "$TASK_RUNNING_FILE"
+        # sed -i "/^$task_id /d" "$TASK_RUNNING_FILE"
     fi
 
     # Add _async=true to the options
@@ -184,10 +193,8 @@ execute_task() {
     job_id=$(echo "$response" | jq -r '.jobid // empty')
 
     if [ -n "$job_id" ]; then
-        # Update the cache file with the new task
-        jq --arg task "$task_id" --arg job_id "$job_id" \
-            '. += [{"task": $task, "job_id": ($job_id | tonumber)}]' "$TASK_RUNNING_FILE" > "${TASK_RUNNING_FILE}.tmp" && mv "${TASK_RUNNING_FILE}.tmp" "$TASK_RUNNING_FILE"
-
+        # Append the new task to the cache file
+        echo "$task_id $job_id" >> "$TASK_RUNNING_FILE"
         log "NOTICE" "Task started successfully: $command $srcFs $dstFs (Job ID: $job_id)"
     else
         log "ERROR" "Failed to start task: $command $srcFs $dstFs. Response: $response"
@@ -298,7 +305,7 @@ setup_cron_tasks() {
     SCRIPT_PATH="$(realpath "$0")"
     
     ensure_file_exists "$TASKS_FILE"
-    echo '[]' > $TASK_RUNNING_FILE
+    truncate -s 0 $TASK_RUNNING_FILE
     
     # Ensure the cron directory exists
     mkdir -p "$cron_dir"
@@ -331,7 +338,7 @@ setup_cron_tasks() {
         fi
         
         # Add the cron job to the crontab file
-        echo "$cron $SCRIPT_PATH execute_task '$payload' >> /proc/1/fd/1 2>> /proc/1/fd/2" >> "$cron_file"
+        echo "$cron $SCRIPT_PATH execute_task '$payload'" >> "$cron_file"
         
         # Log the scheduled task
         log "NOTICE" "Scheduled task: $command $srcFs $dstFs every $cron"
@@ -371,7 +378,54 @@ is_package_installed() {
     apk info --installed "$package" >/dev/null 2>&1
 }
 
-entrypoint() {
+healthcheck() {
+    log "DEBUG" "Running healthcheck..."
+
+    # Check if Rclone API is accessible
+    local api_url="$RCLONE_URL/mount/listmounts"
+    local response
+    response=$(make_curl_request "POST" "mount/listmounts" "")
+
+    if [ -z "$response" ]; then
+        log "ERROR" "Failed to fetch active mounts from Rclone API."
+        exit 1
+    fi
+
+    # Check if mounts.json exists and is valid
+    if [ ! -f "$MOUNTS_FILE" ]; then
+        log "ERROR" "$MOUNTS_FILE not found."
+        exit 1
+    fi
+
+    if jq -e '. | length == 0' "$MOUNTS_FILE" >/dev/null 2>&1; then
+        log "DEBUG" "$MOUNTS_FILE is empty. No mounts to validate. Considering healthy."
+        exit 0
+    fi
+
+    # Validate each mount point
+    local all_mounts_valid=0
+    while IFS= read -r configured_mount; do
+        local fs mount_point
+        fs=$(echo "$configured_mount" | jq -r '.fs')
+        mount_point=$(echo "$configured_mount" | jq -r '.mountPoint')
+
+        if ! echo "$response" | jq -e --arg fs "$fs" --arg mount_point "$mount_point" \
+            'select(.Fs == $fs and .MountPoint == $mount_point)' >/dev/null; then
+            log "ERROR" "Mount $fs at $mount_point is not active."
+            all_mounts_valid=1
+        fi
+    done < <(jq -c '.[]' "$MOUNTS_FILE")
+
+    if [ "$all_mounts_valid" -eq 0 ]; then
+        log "DEBUG" "All mounts are active."
+        exit 0
+    else
+        log "ERROR" "Some mounts are not active."
+        exit 1
+    fi
+}
+
+init() {
     # Main script execution
     (
         # Add "-vv" to RCLONE_OPTS if DEBUG is set to 1
@@ -457,13 +511,15 @@ entrypoint() {
 }
 
 # Handle direct execution of tasks
-if [ "$1" = "execute_task" ]; then
-    shift
-    execute_task "$@"
-fi
-
-# Call the entrypoint function if no arguments are provided
-if [ "$1" = "entrypoint" ]; then
-    shift
-    entrypoint "$@"
-fi
+case "$1" in
+    execute_task)
+        shift
+        execute_task "$@" >> /proc/1/fd/1 2>> /proc/1/fd/2
+        ;;
+    healthcheck)
+        healthcheck >> /proc/1/fd/1 2>> /proc/1/fd/2
+        ;;
+    *)
+        init "$@"
+        ;;
+esac
