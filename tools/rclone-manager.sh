@@ -180,7 +180,6 @@ execute_task() {
             job_finished=$(echo "$job_info" | jq -r '.finished')
 
             if [ "$job_finished" = "false" ]; then
-            echo test
                 log "NOTICE" "Task $command $srcFs $dstFs is already running (Job ID: $job_id). Skipping execution."
                 return 0
             fi
@@ -355,8 +354,8 @@ setup_cron_tasks() {
     log "DEBUG" "Cron jobs have been set up successfully."
 }
 
-# Initialize rclone
-initialize() {
+# initialize_configs rclone
+initialize_configs() {
     log "NOTICE" "Waiting for rclone service to be available..."
     while ! is_rclone_ready; do
         log "NOTICE" "Rclone not ready, waiting $RETRY_INTERVAL seconds..."
@@ -484,7 +483,7 @@ init() {
         sleep $RETRY_INTERVAL
 
         # Run the initialization logic
-        if ! initialize; then
+        if ! initialize_configs; then
             log "ERROR" "Initialization failed. Terminating rclone..."
             graceful_shutdown 1
         fi
