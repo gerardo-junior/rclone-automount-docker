@@ -1,0 +1,16 @@
+[
+    {
+        "cron": "0 * * * *",
+        "command": "sync",
+        "opts": {
+            "srcFs": "gphotos-fsociety:media/by-month",
+            "dstFs": "/photos-fsociety",
+            "createEmptySrcDirs": true,
+            "filter": "- *.json",
+            "checkFirst": true,
+            "update": true,
+            "verbose": true,
+            "tpslimit": 5
+        }
+    }
+]
