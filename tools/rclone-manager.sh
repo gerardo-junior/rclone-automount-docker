@@ -161,24 +161,30 @@ execute_task() {
         }' | tac | grep "$task_id");
 
     # Check if the task is already running
-    if grep -q "^$task_id " "$TASK_RUNNING_FILE"; then
+    local matched_line
+    matched_line=$(echo "$tasks_running" | grep -F "$task_id")
+
+    if [ -n "$matched_line" ]; then
         local job_id
-        job_id=$(grep "^$task_id " "$TASK_RUNNING_FILE" | awk '{print $NF}')
+        job_id=$(echo "$matched_line" | awk '{print $NF}')
 
         # Check the status of the existing job
         local job_info
         job_info=$(make_curl_request "POST" "job/status?jobid=$job_id" "")
 
-        local job_finished
-        job_finished=$(echo "$job_info" | jq -r '.finished')
+        # Verifica se houve erro (ex: job não encontrado)
+        if [ -z "$job_info" ]; then
+            log "DEBUG" "Job ID $job_id not found or failed to fetch status. Proceeding to re-execute task."
+        else
+            local job_finished
+            job_finished=$(echo "$job_info" | jq -r '.finished')
 
-        if [ "$job_finished" = "false" ]; then
-            log "NOTICE" "Task $command $srcFs $dstFs is already running (Job ID: $job_id). Skipping execution."
-            return 0
+            if [ "$job_finished" = "false" ]; then
+            echo test
+                log "NOTICE" "Task $command $srcFs $dstFs is already running (Job ID: $job_id). Skipping execution."
+                return 0
+            fi
         fi
-
-        # If the job is finished, remove it from the cache
-        # sed -i "/^$task_id /d" "$TASK_RUNNING_FILE"
     fi
 
     # Add _async=true to the options
