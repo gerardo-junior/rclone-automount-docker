@@ -234,8 +234,6 @@ read_mount_payloads() {
 
 # Function to mount payloads
 mount_payloads() {
-    # unmounting before mounting
-    unmount_all
     
     local all_mount_success=0  # Start with success (0 means success in shell)
     local payloads
@@ -247,6 +245,9 @@ mount_payloads() {
         log "NOTICE" "No payloads to mount. Skipping mount process."
         return 0
     fi
+
+    # unmounting before mounting
+    unmount_all
     
     log "DEBUG" "Processing payloads: $payloads"
     # Loop through each payload
@@ -362,7 +363,7 @@ initialize_configs() {
         sleep "$RETRY_INTERVAL"
     done
     log "NOTICE" "Rclone is ready."
-    
+        
     if ! mount_payloads; then
         log "ERROR" "Failed to mount payloads."
         return 1
@@ -386,26 +387,28 @@ is_package_installed() {
 healthcheck() {
     log "DEBUG" "Running healthcheck..."
 
-    # Check if Rclone API is accessible
-    local api_url="$RCLONE_URL/mount/listmounts"
-    local response
-    response=$(make_curl_request "POST" "mount/listmounts" "")
-
-    if [ -z "$response" ]; then
-        log "ERROR" "Failed to fetch active mounts from Rclone API."
-        exit 1
-    fi
-
-    # Check if mounts.json exists and is valid
+    # Check if mounts.json exists
     if [ ! -f "$MOUNTS_FILE" ]; then
         log "ERROR" "$MOUNTS_FILE not found."
         exit 1
     fi
 
+    # Check if mounts.json is empty
     if jq -e '. | length == 0' "$MOUNTS_FILE" >/dev/null 2>&1; then
         log "DEBUG" "$MOUNTS_FILE is empty. No mounts to validate. Considering healthy."
         exit 0
     fi
+
+    # Get active mounts from Rclone API
+    local response
+    response=$(make_curl_request "POST" "mount/listmounts" "")
+    if [ -z "$response" ]; then
+        log "ERROR" "Failed to fetch active mounts from Rclone API."
+        exit 1
+    fi
+
+    # Debug output
+    log "DEBUG" "API Response: $response"
 
     # Validate each mount point
     local all_mounts_valid=0
@@ -414,10 +417,18 @@ healthcheck() {
         fs=$(echo "$configured_mount" | jq -r '.fs')
         mount_point=$(echo "$configured_mount" | jq -r '.mountPoint')
 
-        if ! echo "$response" | jq -e --arg fs "$fs" --arg mount_point "$mount_point" \
-            'select(.Fs == $fs and .MountPoint == $mount_point)' >/dev/null; then
+        # Normalize paths (remove trailing slashes)
+        mount_point=$(echo "$mount_point" | sed 's:/*$::')
+
+        log "DEBUG" "Checking mount: fs=$fs, mount_point=$mount_point"
+
+        # Check if this mount exists in the active mounts
+        if ! echo "$response" | jq -e --arg fs "$fs" --arg mp "$mount_point" \
+            '.mountPoints[] | select(.Fs == $fs and (.MountPoint == $mp or .MountPoint == ($mp + "/")))' >/dev/null; then
             log "ERROR" "Mount $fs at $mount_point is not active."
             all_mounts_valid=1
+        else
+            log "DEBUG" "Mount $fs at $mount_point is active."
         fi
     done < <(jq -c '.[]' "$MOUNTS_FILE")
 
