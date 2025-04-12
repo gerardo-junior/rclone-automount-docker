@@ -18,12 +18,12 @@ log() {
     local message="$2"
     local timestamp
     timestamp=$(date '+%Y/%m/%d %H:%M:%S')
-    
+
     # Only show DEBUG logs if DEBUG variable is set to 1
     if [ "$level" = "DEBUG" ] && [ "${DEBUG:-0}" -ne 1 ]; then
         return
     fi
-    
+
     echo "$timestamp $level: $message" >&2
 }
 
@@ -70,24 +70,24 @@ unmount_all() {
 # Function for graceful shutdown
 graceful_shutdown() {
     local exit_code="${1:-0}"  # Default exit code is 0
-    
+
     log "NOTICE" "Performing graceful shutdown..."
-    
+
     # Unmount all mount points
     unmount_all
-    
+
     # Kill Rclone daemon if running
     if [ -n "$PID_RCLONE" ] && kill -0 "$PID_RCLONE" 2>/dev/null; then
         log "NOTICE" "Stopping Rclone daemon..."
         kill "$PID_RCLONE" 2>/dev/null
     fi
-    
+
     # Kill Cron daemon if running
     if [ -n "$PID_CROND" ] && kill -0 "$PID_CROND" 2>/dev/null; then
         log "NOTICE" "Stopping Cron daemon..."
         kill "$PID_CROND" 2>/dev/null
     fi
-    
+
     log "NOTICE" "Shutdown complete. Exiting with code $exit_code."
     exit "$exit_code"
 }
@@ -97,14 +97,14 @@ trap 'graceful_shutdown' SIGTERM SIGINT
 
 ensure_file_exists() {
     local file_path="$1"
-    
+
     log "DEBUG" "Ensuring $file_path exists."
-    
+
     if [ -z "$file_path" ]; then
         log "ERROR" "No file path provided to ensure_file_exists."
         graceful_shutdown 1
     fi
-    
+
     if [ ! -f "$file_path" ]; then
         log "NOTICE" "Creating $file_path with an empty array."
         mkdir -p "$(dirname "$file_path")"
@@ -119,7 +119,7 @@ ensure_file_exists() {
 is_rclone_ready() {
     local response_code
     response_code=$(make_curl_request "OPTIONS" "rc/noopauth" "" -w "%{http_code}" -o /dev/null)
-    
+
     if [ "$response_code" -eq 200 ]; then
         return 0  # Rclone está pronto
     else
@@ -212,19 +212,19 @@ execute_task() {
 # Function to read mount payloads
 read_mount_payloads() {
     ensure_file_exists "$MOUNTS_FILE"
-    
+
     # Check if the file is empty or invalid
     if [ ! -s "$MOUNTS_FILE" ]; then
         log "DEBUG" "$MOUNTS_FILE is empty."
         return 0
     fi
-    
+
     log "DEBUG" "Checking if $MOUNTS_FILE contains valid entries."
     if ! jq -e '. | length > 0' "$MOUNTS_FILE" >/dev/null 2>&1; then
         log "DEBUG" "No valid mount entries found in $MOUNTS_FILE."
         return 0
     fi
-    
+
     log "DEBUG" "Parsing JSON entries from $MOUNTS_FILE."
     jq -c '.[]' "$MOUNTS_FILE" 2>/dev/null || {
         log "ERROR" "Failed to parse JSON from $MOUNTS_FILE."
@@ -234,12 +234,12 @@ read_mount_payloads() {
 
 # Function to mount payloads
 mount_payloads() {
-    
+
     local all_mount_success=0  # Start with success (0 means success in shell)
     local payloads
     log "DEBUG" "Reading mount payloads."
     payloads=$(read_mount_payloads) || return 1
-    
+
     # Validate if there are any payloads before proceeding
     if [ -z "$payloads" ]; then
         log "NOTICE" "No payloads to mount. Skipping mount process."
@@ -248,7 +248,7 @@ mount_payloads() {
 
     # unmounting before mounting
     unmount_all
-    
+
     log "DEBUG" "Processing payloads: $payloads"
     # Loop through each payload
     echo "$payloads" | while IFS= read -r payload; do
@@ -258,16 +258,16 @@ mount_payloads() {
         mount_point=$(echo "$payload" | jq -r '.mountPoint')
         mount_opt=$(echo "$payload" | jq -c '.mountOpt // {}')
         vfs_opt=$(echo "$payload" | jq -c '.vfsOpt // {}')
-        
+
         log "DEBUG" "Extracted fs: $fs, mount_point: $mount_point, mount_opt: $mount_opt, vfs_opt: $vfs_opt"
-        
+
         # Validate required fields
         if [ -z "$fs" ] || [ -z "$mount_point" ]; then
             log "ERROR" "Invalid payload: $payload"
             all_mount_success=1  # Mark as failure
             continue
         fi
-        
+
         # Ensure the mount point exists
         log "DEBUG" "Checking if mount point $mount_point exists."
         if [ ! -d "$mount_point" ]; then
@@ -285,10 +285,10 @@ mount_payloads() {
         else
             log "DEBUG" "Mount point $mount_point already exists."
         fi
-        
+
         log "DEBUG" "Mounting $fs to $mount_point..."
         response=$(make_curl_request "POST" "mount/mount" "{\"fs\":\"$fs\",\"mountPoint\":\"$mount_point\",\"mountOpt\":$mount_opt,\"vfsOpt\":$vfs_opt}" -w "%{http_code}" -o /dev/null)
-        
+
         if [ "$response" -eq 200 ]; then
             log "NOTICE" "Mount successful $fs to $mount_point."
         else
@@ -296,60 +296,60 @@ mount_payloads() {
             all_mount_success=1  # Mark as failure
         fi
     done
-    
+
     return $all_mount_success
 }
 
 # Function to process tasks.json and generate crontab entries
 setup_cron_tasks() {
     log "DEBUG" "Setting cron tasks ..."
-    
+
     local cron_dir="/var/spool/cron/crontabs"
     local cron_file="$cron_dir/root"
-    
+
     # Determine the absolute path of the current script
     SCRIPT_PATH="$(realpath "$0")"
-    
+
     ensure_file_exists "$TASKS_FILE"
     truncate -s 0 $TASK_RUNNING_FILE
-    
+
     # Ensure the cron directory exists
     mkdir -p "$cron_dir"
     chmod 600 "$cron_dir"
-    
+
     # Clear any existing crontab entries by overwriting the file
     log "NOTICE" "Clearing existing crontab entries..."
     : > "$cron_file"  # Truncate the file to ensure it's empty
-    
+
     # Check if tasks.json contains a non-empty array
     if [ ! -f "$TASKS_FILE" ] || jq -e '. | length == 0' "$TASKS_FILE" >/dev/null 2>&1; then
         log "NOTICE" "$TASKS_FILE is empty or does not contain valid tasks. Skipping task setup."
         return 0
     fi
-    
+
     # Parse tasks.json and generate cron jobs
     log "DEBUG" "Processing tasks.json to generate cron jobs."
     jq -c '.[]' "$TASKS_FILE" | while IFS= read -r payload; do
         local cron command srcFs dstFs
-        
+
         cron=$(echo "$payload" | jq -r '.cron')
         command=$(echo "$payload" | jq -r '.command')
         srcFs=$(echo "$payload" | jq -r '.opts.srcFs')
         dstFs=$(echo "$payload" | jq -r '.opts.dstFs')
-        
+
         # Validate required fields
         if [ -z "$cron" ] || [ -z "$command" ] || [ -z "$srcFs" ] || [ -z "$dstFs" ]; then
             log "ERROR" "Invalid task entry: $payload. Skipping..."
             continue
         fi
-        
+
         # Add the cron job to the crontab file
         echo "$cron $SCRIPT_PATH execute_task '$payload'" >> "$cron_file"
-        
+
         # Log the scheduled task
         log "NOTICE" "Scheduled task: $command $srcFs $dstFs every $cron"
     done
-    
+
     # Set proper permissions for the crontab file
     chmod 600 "$cron_file"
     log "DEBUG" "Cron jobs have been set up successfully."
@@ -363,17 +363,17 @@ initialize_configs() {
         sleep "$RETRY_INTERVAL"
     done
     log "NOTICE" "Rclone is ready."
-        
+
     if ! mount_payloads; then
         log "ERROR" "Failed to mount payloads."
         return 1
     fi
-    
+
     if ! setup_cron_tasks; then
         log "ERROR" "Failed to set up cron to run tasks."
         return 1
     fi
-    
+
     log "NOTICE" "Rclone initialization complete."
     return 0
 }
@@ -444,23 +444,6 @@ healthcheck() {
 init() {
     # Main script execution
     (
-        # Add "-vv" to RCLONE_OPTS if DEBUG is set to 1
-        if [ "${DEBUG:-0}" -eq 1 ]; then
-            RCLONE_OPTS="$RCLONE_OPTS -vv"
-        fi
-
-        # Ensure correct permissions for rclone.conf
-        if [ -f "$RCLONE_CONFIG" ]; then
-            log "NOTICE" "Setting correct permissions for $RCLONE_CONFIG..."
-            chmod 600 "$RCLONE_CONFIG" || {
-                log "ERROR" "Failed to set permissions for $RCLONE_CONFIG. Exiting..."
-                graceful_shutdown 1
-            }
-        else
-            log "ERROR" "Rclone configuration file $RCLONE_CONFIG not found. Exiting..."
-            graceful_shutdown 1
-        fi
-
         # Define the list of dependencies
         DEPENDENCIES="curl jq fuse3 dcron"
 
@@ -483,6 +466,23 @@ init() {
             fi
         else
             log "NOTICE" "All dependencies are already installed."
+        fi
+
+        # Add "-vv" to RCLONE_OPTS if DEBUG is set to 1
+        if [ "${DEBUG:-0}" -eq 1 ]; then
+            RCLONE_OPTS="$RCLONE_OPTS -vv"
+        fi
+
+        # Ensure correct permissions for rclone.conf
+        if [ -f "$RCLONE_CONFIG" ]; then
+            log "NOTICE" "Setting correct permissions for $RCLONE_CONFIG..."
+            chmod 600 "$RCLONE_CONFIG" || {
+                log "ERROR" "Failed to set permissions for $RCLONE_CONFIG. Exiting..."
+                graceful_shutdown 1
+            }
+        else
+            log "ERROR" "Rclone configuration file $RCLONE_CONFIG not found. Exiting..."
+            graceful_shutdown 1
         fi
 
         # Start rclone daemon
