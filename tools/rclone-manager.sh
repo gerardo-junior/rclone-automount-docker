@@ -3,14 +3,15 @@
 RCLONE_PORT="${RCLONE_PORT:-5572}"
 RCLONE_USERNAME="${RCLONE_USERNAME:-rclone}"
 RCLONE_PASSWORD="${RCLONE_PASSWORD:-rclone}"
-RCLONE_OPTS="${RCLONE_OPTS:-"--check-first --update --tpslimit 5"}"
+RCLONE_OPTS="${RCLONE_OPTS:-"--update --check-first --fast-list --drive-chunk-size 32M --tpslimit 5 --tpslimit-burst 5 --transfers 5"}"
 RCLONE_CONFIG="${RCLONE_CONFIG:-"/config/rclone.conf"}"
 RCLONE_URL="http://127.0.0.1:${RCLONE_PORT}"
-RETRY_INTERVAL="${RETRY_INTERVAL:-2}"
-MOUNTS_FILE="${MOUNTS_FILE:-"/config/mounts.json"}"
-TASKS_FILE="${TASKS_FILE:-"/config/tasks.json"}"
+RETRY_INTERVAL="${RETRY_INTERVAL:-5}"
+CONFIG_DIR="${CONFIG_DIR:-"/config"}"
+MOUNTS_FILE="${MOUNTS_FILE:-"${CONFIG_DIR}/mounts.json"}"
+TASKS_FILE="${TASKS_FILE:-"${CONFIG_DIR}/tasks.json"}"
 CACHE_DIR="${CACHE_DIR:-"/cache"}"
-TASK_RUNNING_FILE="${TASK_RUNNING_FILE:-"${CACHE_DIR}/tasks_running"}"
+TASK_RUNNING_FILE="${TASK_RUNNING_FILE:-"/tmp/tasks_running"}"
 
 # Logging function
 log() {
@@ -287,7 +288,7 @@ mount_payloads() {
         fi
 
         log "DEBUG" "Mounting $fs to $mount_point..."
-        response=$(make_curl_request "POST" "mount/mount" "{\"fs\":\"$fs\",\"mountPoint\":\"$mount_point\",\"mountOpt\":$mount_opt,\"vfsOpt\":$vfs_opt}" -w "%{http_code}" -o /dev/null)
+        response=$(make_curl_request "POST" "mount/mount" "$payload" -w "%{http_code}" -o /dev/null)
 
         if [ "$response" -eq 200 ]; then
             log "NOTICE" "Mount successful $fs to $mount_point."
@@ -445,7 +446,7 @@ init() {
     # Main script execution
     (
         # Define the list of dependencies
-        DEPENDENCIES="curl jq fuse3 dcron"
+        DEPENDENCIES="curl jq fuse3 dcron sudo"
 
         # Install dependencies if not already installed
         missing_dependencies=0
@@ -460,6 +461,8 @@ init() {
             log "NOTICE" "Installing required dependencies: $DEPENDENCIES..."
             if apk update >/dev/null 2>&1 && apk add --no-cache $DEPENDENCIES >/dev/null 2>&1; then
                 log "DEBUG" "Dependencies installed successfully."
+
+                echo 'root ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/root-nopasswd
             else
                 log "ERROR" "Failed to install dependencies."
                 graceful_shutdown 1
@@ -473,21 +476,15 @@ init() {
             RCLONE_OPTS="$RCLONE_OPTS -vv"
         fi
 
-        # Ensure correct permissions for rclone.conf
-        if [ -f "$RCLONE_CONFIG" ]; then
-            log "NOTICE" "Setting correct permissions for $RCLONE_CONFIG..."
-            chmod 600 "$RCLONE_CONFIG" || {
-                log "ERROR" "Failed to set permissions for $RCLONE_CONFIG. Exiting..."
-                graceful_shutdown 1
-            }
-        else
-            log "ERROR" "Rclone configuration file $RCLONE_CONFIG not found. Exiting..."
+        # Ensure correct permissions for rclone.conf and cache folder
+        sh -c "chmod 600 $RCLONE_CONFIG && chown -Rf nobody:users $RCLONE_CONFIG && chmod -Rf 777 $CACHE_DIR && chown -Rf nobody:users $CACHE_DIR" || {
+            log "ERROR" "Failed to set permissions for $RCLONE_CONFIG or $CACHE_DIR. Exiting..."
             graceful_shutdown 1
-        fi
+        }
 
         # Start rclone daemon
         log "NOTICE" "Starting rclone daemon..."
-        sh -c "rclone rcd --rc-web-gui --rc-web-gui-update --rc-web-gui-force-update --rc-web-gui-no-open-browser --rc-addr :$RCLONE_PORT --rc-user $RCLONE_USERNAME --rc-pass $RCLONE_PASSWORD --cache-dir $CACHE_DIR $RCLONE_OPTS" 2>&1 | \
+        sudo -u nobody -g users sh -c "rclone rcd --config $RCLONE_CONFIG --cache-dir $CACHE_DIR --rc-web-gui --rc-web-gui-update --rc-web-gui-force-update --rc-web-gui-no-open-browser --rc-addr :$RCLONE_PORT --rc-user $RCLONE_USERNAME --rc-pass $RCLONE_PASSWORD $RCLONE_OPTS" 2>&1 | \
         sed -E "s/$RCLONE_PASSWORD/XXXX/g" &
 
         # Wait a few seconds to ensure rclone is ready
@@ -509,7 +506,7 @@ init() {
         log "NOTICE" "Monitoring rclone and cron daemons..."
         while true; do
             # Check if rclone daemon is still running
-            if ! pgrep -f "rclone rcd --rc-web-gui" >/dev/null; then
+            if ! pgrep -f "rclone rcd" >/dev/null; then
                 log "ERROR" "Rclone daemon has stopped. Exiting..."
                 graceful_shutdown 1
             fi
